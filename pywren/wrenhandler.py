@@ -151,6 +151,25 @@ def get_server_info():
 
     return server_info
 
+
+def delete_sqs_message(queue_url, receipt_handle):
+    if queue_url is not None and receipt_handle is not None:
+        logger.info("delete sqs message started")
+        sqs_client = boto3.client('sqs', region_name='us-east-1')
+
+        try:
+            response = sqs_client.delete_message(
+                QueueUrl=queue_url,
+                ReceiptHandle=receipt_handle
+            )
+            logger.info("delete sqs message complete")
+        except botocore.exceptions.ClientError as e:
+            if e.response['Error']['Code'] == 'ReceiptHandleIsInvalid':
+                pass
+            else:
+                raise e
+
+
 def generic_handler(event, context_dict):
     """
     context_dict is generic infromation about the context
@@ -159,6 +178,19 @@ def generic_handler(event, context_dict):
 
     response_status = {'exception': None}
     try:
+        logger.info(json.dumps(event))
+        message_id = None
+        receipt_handle = None
+        queue_url = None
+        if 'Body' in event:
+            logger.info("invocation started from sqs")
+            old_event = event
+            event = json.loads(old_event['Body'])
+            logger.info(json.dumps(event))
+            queue_url = old_event['QueueUrl'] if 'QueueUrl' in old_event else None
+            receipt_handle = old_event['ReceiptHandle'] if 'ReceiptHandle' in old_event else None
+            message_id = old_event['MessageId'] if 'MessageId' in old_event else None
+
         if event['storage_config']['storage_backend'] != 's3':
             raise NotImplementedError(("Using {} as storage backend is not supported " +
                                        "yet.").format(event['storage_config']['storage_backend']))
@@ -373,6 +405,9 @@ def generic_handler(event, context_dict):
         # creating new client in case the client has not been created
         boto3.client("s3").put_object(Bucket=s3_bucket, Key=status_key,
                                       Body=json.dumps(response_status))
+
+        if not response_status['exception']:
+            delete_sqs_message(queue_url, receipt_handle)
 
 
 if __name__ == "__main__":
